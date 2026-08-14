@@ -60,6 +60,7 @@ export const Model = Schema.Struct({
     }),
   ),
   experimental: Schema.optional(Schema.Boolean),
+  disabled: Schema.optional(Schema.Boolean).annotate({ description: "Disable this model" }),
   status: Schema.optional(ModelStatus),
   provider: Schema.optional(
     Schema.Struct({ npm: Schema.optional(Schema.String), api: Schema.optional(Schema.String) }),

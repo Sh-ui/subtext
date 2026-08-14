@@ -67,7 +67,7 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
       typeof plugin === "string" ? plugin : { package: plugin[0], options: plugin[1] },
     ),
     experimental: info.experimental?.policies && { policies: info.experimental.policies },
-    providers: providers(info.provider),
+    providers: providers(info.provider, info.disabled_providers),
   }
 }
 
@@ -162,9 +162,15 @@ function migrateMcp(info: ConfigMCPV1.Info) {
   }
 }
 
-function providers(info?: Readonly<Record<string, ConfigProviderV1.Info>>) {
-  if (!info) return undefined
-  return Object.fromEntries(Object.entries(info).map(([name, provider]) => [name, migrateProvider(provider)]))
+function providers(info?: Readonly<Record<string, ConfigProviderV1.Info>>, disabled?: readonly string[]) {
+  if (!info && !disabled?.length) return undefined
+  const result: Record<string, ReturnType<typeof migrateProvider> & { disabled?: boolean }> = Object.fromEntries(
+    Object.entries(info ?? {}).map(([name, provider]) => [name, migrateProvider(provider)]),
+  )
+  for (const name of disabled ?? []) {
+    result[name] = { ...result[name], disabled: true }
+  }
+  return result
 }
 
 function migrateProvider(info: ConfigProviderV1.Info) {
@@ -240,7 +246,7 @@ function migrateModel(info: typeof ConfigProviderV1.Model.Type, packageName?: st
         body: lowerer.request(options),
       })),
     cost: costs,
-    disabled: info.status === "deprecated" ? true : undefined,
+    disabled: info.disabled ?? (info.status === "deprecated" ? true : undefined),
     limit: info.limit && {
       context: int(info.limit.context),
       input: info.limit.input === undefined ? undefined : int(info.limit.input),
