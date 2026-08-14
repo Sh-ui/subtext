@@ -48,6 +48,11 @@ const targets = singleFlag
     })
   : allTargets
 
+const targetFilter = (process.env["OPENCODE_TARGETS"] ?? "")
+  .split(",")
+  .map((x) => x.trim())
+  .filter(Boolean)
+
 if (!skipInstall) await $`bun install --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
 
 for (const item of targets) {
@@ -61,6 +66,7 @@ for (const item of targets) {
     .filter(Boolean)
     .join("-")
   const name = target.replace(binary, "cli")
+  if (targetFilter.length && !targetFilter.includes(target.slice(binary.length + 1))) continue
   console.log(`building ${name}`)
   const result = await Bun.build({
     entrypoints: ["./src/index.ts"],

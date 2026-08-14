@@ -142,6 +142,12 @@ if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
   await $`bun install --os="*" --cpu="*" @ff-labs/fff-bun@${pkg.dependencies["@ff-labs/fff-bun"]}`
 }
+// Optional target filter, e.g. OPENCODE_TARGETS="darwin-x64,darwin-x64-baseline,darwin-arm64"
+const targetFilter = (process.env["OPENCODE_TARGETS"] ?? "")
+  .split(",")
+  .map((x) => x.trim())
+  .filter(Boolean)
+
 for (const item of targets) {
   const name = [
     pkg.name,
@@ -153,6 +159,7 @@ for (const item of targets) {
   ]
     .filter(Boolean)
     .join("-")
+  if (targetFilter.length && !targetFilter.includes(name.slice(pkg.name.length + 1))) continue
   console.log(`building ${name}`)
   await $`mkdir -p dist/${name}/bin`
 
