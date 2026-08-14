@@ -12,6 +12,7 @@ import { Lifecycle } from "./utils/lifecycle"
 import { OpenAIImage } from "./utils/openai-image"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { OpenResponsesChannel } from "./open-responses-channel"
+import { OpenAIResponsesChannel } from "./openai-responses-channel"
 
 const ADAPTER = "openai-responses"
 const NAME = "OpenAI Responses"
@@ -248,6 +249,7 @@ export const transport = OpenResponsesChannel.transport<OpenAIResponsesBody>({
   name: NAME,
   rotateAfterMs: WEBSOCKET_ROTATE_AFTER_MS,
   headers: (headers) => Headers.set(headers, "openai-beta", headers["openai-beta"] ?? WEBSOCKET_PROTOCOL_HEADER),
+  driver: (input) => OpenAIResponsesChannel.driver({ id: ADAPTER, name: NAME, ...input }),
 })
 
 export const route = Route.make({
