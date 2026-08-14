@@ -27,6 +27,7 @@ import osakaJade from "./assets/osaka-jade.json" with { type: "json" }
 import palenight from "./assets/palenight.json" with { type: "json" }
 import rosepine from "./assets/rosepine.json" with { type: "json" }
 import solarized from "./assets/solarized.json" with { type: "json" }
+import subtext from "./assets/subtext.json" with { type: "json" }
 import synthwave84 from "./assets/synthwave84.json" with { type: "json" }
 import tokyonight from "./assets/tokyonight.json" with { type: "json" }
 import vercel from "./assets/vercel.json" with { type: "json" }
@@ -155,6 +156,7 @@ export const DEFAULT_THEMES: Record<string, ThemeJson> = {
   palenight,
   rosepine,
   solarized,
+  subtext,
   synthwave84,
   tokyonight,
   vesper,
