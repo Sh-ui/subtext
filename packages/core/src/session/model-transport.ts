@@ -12,7 +12,7 @@ import {
 } from "@opencode-ai/ai/route"
 import { AIError, TransportReason } from "@opencode-ai/ai"
 import { Hash } from "@opencode-ai/util/hash"
-import { Cause, Clock, Context, Effect, Fiber, Layer, Queue, Scope, Semaphore, Stream } from "effect"
+import { Cause, Clock, Context, Effect, Fiber, Layer, Metric, Queue, Scope, Semaphore, Stream } from "effect"
 import { Socket } from "effect/unstable/socket"
 import { makeLocationNode } from "@opencode-ai/util/effect/app-node"
 import { SessionSchema } from "./schema"
@@ -20,6 +20,12 @@ import { webSocketConstructor } from "../effect/app-node-platform"
 
 const ROTATE_AFTER_MS = 55 * 60 * 1000
 const INBOUND_CAPACITY = 128
+const events = Metric.counter("opencode_session_websocket_events_total", {
+  description: "Session WebSocket lifecycle events",
+  incremental: true,
+})
+const metric = (event: string, attributes: Record<string, string> = {}) =>
+  Metric.update(events.pipe(Metric.withAttributes({ event, ...attributes })), 1)
 
 type Delivery = "queued" | "connecting" | "ready" | "send-attempted" | "provider-observed" | "terminal"
 
@@ -138,6 +144,7 @@ export const makeLayer = (connector: WebSocketConnector) =>
               }),
             ),
           )
+        yield* metric("close")
       })
 
       const poison = Effect.fn("SessionModelTransport.poison")(function* (
@@ -150,6 +157,11 @@ export const makeLayer = (connector: WebSocketConnector) =>
         if (channel.closing) return
         channel.closing = true
         if (channel.active) Queue.failCauseUnsafe(channel.active.queue, Cause.fail(error))
+        yield* metric(
+          error.reason._tag === "Transport" && error.reason.kind === "queue-overflow"
+            ? "queue_overflow"
+            : "protocol_failure",
+        )
         yield* channel.connection.close
       })
 
@@ -160,7 +172,9 @@ export const makeLayer = (connector: WebSocketConnector) =>
       ) {
         return yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
-            const connection = yield* restore(connector.open(exchange.connect))
+            const connection = yield* restore(
+              connector.open(exchange.connect).pipe(Effect.withSpan("SessionModelTransport.connect")),
+            )
             const channel: Channel = {
               affinity: key,
               connection,
@@ -219,6 +233,7 @@ export const makeLayer = (connector: WebSocketConnector) =>
               sessionTransport: "websocket",
               phase: "connect",
             })
+            yield* metric("connect")
             return channel
           }),
         )
@@ -253,6 +268,8 @@ export const makeLayer = (connector: WebSocketConnector) =>
             phase: "connect",
             reason: rotation,
           })
+          yield* metric("rotation", { reason: rotation })
+          yield* metric("reconnect")
           yield* closeChannel(owner, current)
         }
 
@@ -262,6 +279,7 @@ export const makeLayer = (connector: WebSocketConnector) =>
             sessionTransport: "websocket",
             phase: "connect",
           })
+        if (owner.channel) yield* metric("reuse")
         const channel = owner.channel
           ? owner.channel
           : yield* open(owner, exchange, key).pipe(
@@ -271,7 +289,11 @@ export const makeLayer = (connector: WebSocketConnector) =>
                   phase: "connect",
                   delivery: "not-sent",
                   kind: error.reason._tag === "Transport" ? error.reason.kind : error.reason._tag,
-                }).pipe(Effect.andThen(Effect.succeed(undefined))),
+                }).pipe(
+                  Effect.andThen(metric("connect_failure")),
+                  Effect.andThen(metric("fallback")),
+                  Effect.andThen(Effect.succeed(undefined)),
+                ),
               ),
             )
         if (!channel) return fallback(exchange)
@@ -291,6 +313,7 @@ export const makeLayer = (connector: WebSocketConnector) =>
         channel.active = active
         lifecycle.delivery = "send-attempted"
         const sent = yield* channel.connection.sendText(create.message).pipe(
+          Effect.withSpan("SessionModelTransport.send"),
           Effect.onInterrupt(() => closeChannel(owner, channel)),
           Effect.result,
         )
@@ -298,9 +321,14 @@ export const makeLayer = (connector: WebSocketConnector) =>
           const failure = sent.failure
           const notSent = failure.reason._tag === "Transport" && failure.reason.delivery === "not-sent"
           yield* closeChannel(owner, channel)
-          if (notSent) return fallback(exchange)
+          if (notSent) {
+            yield* metric("fallback")
+            return fallback(exchange)
+          }
+          yield* metric("ambiguous_delivery")
           return yield* annotate(failure, { phase: "send", delivery: "ambiguous" })
         }
+        yield* metric("send")
 
         let terminal: ChannelObservation | undefined
         const token = {}
@@ -313,6 +341,7 @@ export const makeLayer = (connector: WebSocketConnector) =>
               terminal = observation
               lifecycle.delivery = "terminal"
               staged = observation.type === "completed" ? observation.checkpoint : undefined
+              if (staged) channel.pending = { token, checkpoint: staged }
               if (observation.type !== "completed" || !staged) channel.checkpoint = undefined
             }),
           ),
@@ -324,11 +353,13 @@ export const makeLayer = (connector: WebSocketConnector) =>
               const pending = yield* Queue.size(active.queue)
               yield* Queue.shutdown(active.queue)
               if (terminal && pending === 0) {
-                if (staged) channel.pending = { token, checkpoint: staged }
+                yield* metric("terminal", { type: terminal.type })
+                if (terminal.type === "rejected") yield* metric("rejection", { recovery: terminal.recovery })
                 if (terminal.type === "rejected" && terminal.recovery === "rotate-and-retry-full")
                   yield* closeChannel(owner, channel)
                 return
               }
+              yield* metric("cancellation")
               channel.checkpoint = undefined
               channel.pending = undefined
               const error = terminal
